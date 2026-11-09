@@ -467,7 +467,10 @@ def check_code_complexity(code: str) -> list[str]:
     import re
 
     hardcoded_patterns = [
-        (r"print\(['\"].*:\s*0\.\d+['\"]\)", "print statement with hardcoded metric value"),
+        (
+            r"print\(['\"].*:\s*0\.\d+['\"]\)",
+            "print statement with hardcoded metric value",
+        ),
         (r"metric.*=\s*0\.\d{2,}", "hardcoded metric assignment"),
     ]
     for pattern, desc in hardcoded_patterns:
@@ -537,7 +540,10 @@ def check_class_quality(all_files: dict[str, str]) -> list[str]:
                         for sub in ast.walk(item):
                             if isinstance(sub, ast.Call):
                                 call_name = _resolve_call_name(sub.func)
-                                if call_name.startswith("nn.") and call_name != "nn.Module":
+                                if (
+                                    call_name.startswith("nn.")
+                                    and call_name != "nn.Module"
+                                ):
                                     has_forward_new_module = True
 
             # Count effective body lines
@@ -545,8 +551,10 @@ def check_class_quality(all_files: dict[str, str]) -> list[str]:
             if node.end_lineno and node.lineno:
                 cls_body = code_lines[node.lineno - 1 : node.end_lineno]
                 body_lines = sum(
-                    1 for l in cls_body
-                    if l.strip() and not l.strip().startswith("#")
+                    1
+                    for l in cls_body
+                    if l.strip()
+                    and not l.strip().startswith("#")
                     and not l.strip().startswith(("import ", "from "))
                 )
 
@@ -588,7 +596,7 @@ def check_class_quality(all_files: dict[str, str]) -> list[str]:
     class_names = list(class_info.keys())
     for i, name_a in enumerate(class_names):
         info_a = class_info[name_a]
-        for name_b in class_names[i + 1:]:
+        for name_b in class_names[i + 1 :]:
             info_b = class_info[name_b]
             if (
                 info_a["body_lines"] > 5
@@ -673,7 +681,7 @@ def check_class_quality(all_files: dict[str, str]) -> list[str]:
 
                 # --- Check 6: Ablation subclass must override >=1 parent method ---
                 _lname = cls_name.lower()
-                if ("ablation" in _lname or "no_" in _lname or "without" in _lname):
+                if "ablation" in _lname or "no_" in _lname or "without" in _lname:
                     parent_non_dunder = {
                         m.name
                         for m in parent_node.body
@@ -743,9 +751,7 @@ def check_variable_scoping(code: str, fname: str = "main.py") -> list[str]:
     return warnings
 
 
-def _collect_if_only_assignments(
-    if_node: ast.If, result: dict[str, int]
-) -> None:
+def _collect_if_only_assignments(if_node: ast.If, result: dict[str, int]) -> None:
     """Collect variables assigned only inside if/elif branches."""
     for child in ast.iter_child_nodes(if_node):
         if isinstance(child, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
@@ -884,8 +890,14 @@ def check_api_correctness(code: str, fname: str = "main.py") -> list[str]:
             )
 
         # NumPy 2.0 removed type aliases
-        for old_alias in ("np.bool", "np.int", "np.float", "np.complex",
-                          "np.object", "np.str"):
+        for old_alias in (
+            "np.bool",
+            "np.int",
+            "np.float",
+            "np.complex",
+            "np.object",
+            "np.str",
+        ):
             pattern = _re.escape(old_alias) + r"(?![_\w\d])"
             if _re.search(pattern, stripped):
                 warnings.append(
@@ -909,8 +921,7 @@ def check_api_correctness(code: str, fname: str = "main.py") -> list[str]:
         m = _re.match(r"from\s+([\w.]+)\s+import\s+(.+)", stripped)
         if m:
             mod = m.group(1)
-            names = {n.strip().split(" as ")[-1].strip()
-                     for n in m.group(2).split(",")}
+            names = {n.strip().split(" as ")[-1].strip() for n in m.group(2).split(",")}
             import_from_map.setdefault(mod, set()).update(names)
         elif _re.match(r"import\s+([\w.]+)", stripped) and "from" not in stripped:
             m2 = _re.match(r"import\s+([\w.]+)", stripped)
@@ -955,3 +966,256 @@ def deep_validate_files(
         warnings.extend(check_variable_scoping(code, fname))
         warnings.extend(check_api_correctness(code, fname))
     return warnings
+
+
+# ---------------------------------------------------------------------------
+# Semantic completeness validation (E-10)
+# ---------------------------------------------------------------------------
+
+
+def check_experiment_completeness(
+    files: dict[str, str],
+    metric_key: str = "",
+    conditions: list[str] | None = None,
+) -> tuple[list[str], list[str]]:
+    """Check if generated code actually runs a complete experiment.
+
+    This is a SEMANTIC check that goes beyond syntax validation. It verifies
+    that the generated main.py:
+    1. Has an actual experiment entry point (not just data/module tests)
+    2. Prints metrics in the required format
+    3. Runs training/evaluation (not just loads data)
+    4. Iterates through all conditions
+
+    Returns (critical_issues, warnings).
+    """
+    import re as _re
+
+    critical: list[str] = []
+    warnings: list[str] = []
+
+    main_code = files.get("main.py", "")
+    if not main_code:
+        critical.append("main.py is missing — experiment must have an entry point")
+        return critical, warnings
+
+    # --- Check 1: Has `if __name__ == "__main__"` block ---
+    if "__name__" not in main_code or '"__main__"' not in main_code:
+        critical.append(
+            "main.py lacks `if __name__ == '__main__'` block — "
+            "experiment code must have an entry point that runs when executed"
+        )
+        return critical, warnings  # Can't check further without main block
+
+    # --- Check 2: Main block does more than just data testing ---
+    # Extract the main block content
+    main_block_match = _re.search(
+        r'if\s+__name__\s*==\s*["\']__main__["\']\s*:\s*\n(.*?)(?=\n\S|\Z)',
+        main_code,
+        _re.DOTALL,
+    )
+    if main_block_match:
+        main_block = main_block_match.group(1)
+        # Count effective lines in main block (non-blank, non-comment)
+        main_block_lines = [
+            l
+            for l in main_block.splitlines()
+            if l.strip() and not l.strip().startswith("#")
+        ]
+
+        # Check for patterns that indicate just testing, not running experiments
+        test_patterns = [
+            (
+                r"print\s*\([^)]*[Tt]est",
+                "main block appears to be a test (contains 'test' in print)",
+            ),
+            (
+                r"print\s*\([^)]*[Dd]ata [Mm]odule [Tt]est",
+                "main block is just a data module test",
+            ),
+            (
+                r"print\s*\([^)]*[Mm]odel [Aa]rchitecture [Tt]est",
+                "main block is just a model architecture test",
+            ),
+            (
+                r"get_sample_batch",
+                "main block only gets sample batches, doesn't run experiments",
+            ),
+            (r"Testing dataloaders", "main block only tests dataloaders"),
+            (r"Data module test complete", "main block ends with data test completion"),
+            (r"Model tests passed", "main block ends with model test completion"),
+        ]
+
+        for pattern, msg in test_patterns:
+            if _re.search(pattern, main_block, _re.IGNORECASE):
+                critical.append(f"main.py main block is incomplete: {msg}")
+                break
+
+        # Check that main block has at least 10 effective lines
+        if len(main_block_lines) < 10:
+            warnings.append(
+                f"main.py main block has only {len(main_block_lines)} effective lines — "
+                f"real experiments typically need more code for training/evaluation"
+            )
+
+    # --- Check 3: Has metric printing in correct format ---
+    # Look for `print(f'...{metric}: ...')` or `print(f"...{metric}: ...")` patterns
+    metric_print_patterns = [
+        r'print\s*\(\s*f[\'"][^\'"]*' + _re.escape(metric_key) + r'[^\'"]*[\'"]',
+        r'print\s*\(\s*f[\'"][^\'"]*:\s*\{[^}]+\}[^\'"]*[\'"]',  # any `name: {value}` pattern
+        r"print\s*\([^)]*:\s*\{",  # print with `: {` format
+    ]
+
+    has_metric_print = False
+    for pattern in metric_print_patterns:
+        if _re.search(pattern, main_code):
+            has_metric_print = True
+            break
+
+    if not has_metric_print:
+        # Also check for simpler patterns like print(f"{metric}: {value}")
+        if not _re.search(r"print\s*\([^)]*\{[^}]+\}[^)]*\}", main_code):
+            critical.append(
+                "main.py does not print metrics in the required format — "
+                "must have `print(f'name: {value}')` style output"
+            )
+
+    # --- Check 4: Has training/evaluation loop indicators ---
+    train_patterns = [
+        (r"for\s+\w+\s+in\s+range\s*\(\s*epochs", "epoch loop"),
+        (r"for\s+\w+\s+in\s+range\s*\(\s*num_epochs", "num_epochs loop"),
+        (r"\.train\s*\(\s*\)", "model.train() call"),
+        (r"\.eval\s*\(\s*\)", "model.eval() call"),
+        (r"for\s+\w+\s+in\s+\w+_loader", "dataloader iteration"),
+        (r"for\s+batch", "batch iteration"),
+        (r"optimizer\.step", "optimizer.step() call"),
+        (r"loss\.backward", "loss.backward() call"),
+        (r"for\s+seed\s+in", "seed iteration loop"),
+        (r"for\s+\w+_seed\s+in", "seed iteration loop"),
+        (r"for\s+condition\s+in", "condition iteration loop"),
+        (r"for\s+\w+_name\s+in\s+conditions", "conditions iteration"),
+    ]
+
+    has_train_loop = False
+    for pattern, _ in train_patterns:
+        if _re.search(pattern, main_code):
+            has_train_loop = True
+            break
+
+    if not has_train_loop:
+        # Check for alternative patterns: simulation experiments
+        sim_patterns = [
+            r"for\s+\w+\s+in\s+range\s*\(\s*\d+\s*\)\s*:",  # any range loop
+            r"for\s+\w+\s+in\s+\w+s\s*:",  # iterating over plural nouns
+            r"np\.random\.\w+\s*\(",  # numpy random calls (simulation)
+            r"simulate|run_experiment|evaluate",  # experiment function names
+        ]
+        for pattern in sim_patterns:
+            if _re.search(pattern, main_code, _re.IGNORECASE):
+                has_train_loop = True
+                break
+
+    if not has_train_loop:
+        critical.append(
+            "main.py lacks training/evaluation loops — "
+            "experiment code must iterate over epochs, batches, seeds, or conditions"
+        )
+
+    # --- Check 5: Has actual experiment logic (not just imports/definitions) ---
+    # Count function calls in main block (indicator of actual work being done)
+    main_block_calls = len(
+        _re.findall(r"\w+\s*\(", main_block_match.group(1) if main_block_match else "")
+    )
+    if main_block_calls < 5:
+        warnings.append(
+            f"main.py main block has only {main_block_calls} function calls — "
+            f"real experiments typically call many functions (train, evaluate, print, etc.)"
+        )
+
+    # --- Check 6: Has condition iteration (for multi-condition experiments) ---
+    if conditions and len(conditions) > 1:
+        # Check that main.py iterates over conditions
+        condition_patterns = [
+            r"for\s+\w+\s+in\s+conditions",
+            r"for\s+\w+\s+in\s+\[.*\]",  # list iteration
+            r"for\s+\w+_name\s+in",
+        ]
+        has_condition_loop = any(_re.search(p, main_code) for p in condition_patterns)
+        if not has_condition_loop:
+            warnings.append(
+                f"Experiment plan has {len(conditions)} conditions but main.py "
+                f"may not iterate over all of them — verify all conditions are run"
+            )
+
+    # --- Check 7: Not just data/model definitions ---
+    # Count class/function definitions vs actual code
+    def_count = len(_re.findall(r"^\s*(def|class)\s+", main_code, _re.MULTILINE))
+    code_lines = [
+        l for l in main_code.splitlines() if l.strip() and not l.strip().startswith("#")
+    ]
+    if def_count > 0 and len(code_lines) > 0:
+        def_ratio = def_count / len(code_lines)
+        if def_ratio > 0.3:  # More than 30% definitions = likely no experiment logic
+            warnings.append(
+                f"main.py has many definitions ({def_count}) relative to code lines — "
+                f"should be primarily experiment execution, not definitions"
+            )
+
+    return critical, warnings
+
+
+def format_completeness_issues_for_llm(
+    critical: list[str],
+    warnings: list[str],
+) -> str:
+    """Format completeness issues for LLM repair prompt."""
+    lines: list[str] = []
+
+    if critical:
+        lines.append("## CRITICAL COMPLETENESS ISSUES (MUST FIX)")
+        lines.append(
+            "The generated code is NOT a complete experiment. Fix ALL of these:\n"
+        )
+        for i, issue in enumerate(critical, 1):
+            lines.append(f"{i}. {issue}")
+        lines.append("")
+
+    if warnings:
+        lines.append("## Completeness Warnings (should address)")
+        for issue in warnings:
+            lines.append(f"- {issue}")
+        lines.append("")
+
+    lines.append("## What main.py MUST contain:")
+    lines.append(
+        "1. An `if __name__ == '__main__':` block that runs ACTUAL experiments"
+    )
+    lines.append(
+        "2. Training loops (for epoch in range(epochs): ...) or evaluation loops"
+    )
+    lines.append("3. Metric printing in format: print(f'metric_name: {value}')")
+    lines.append("4. Iteration over ALL conditions/seeds (not just one)")
+    lines.append(
+        "5. Real computations (not just data loading or model architecture tests)"
+    )
+    lines.append("")
+    lines.append("## Example main.py structure:")
+    lines.append("```python")
+    lines.append("if __name__ == '__main__':")
+    lines.append("    conditions = ['baseline', 'proposed', 'ablation']")
+    lines.append("    for condition in conditions:")
+    lines.append("        for seed in range(5):")
+    lines.append("            np.random.seed(seed)")
+    lines.append("            # ... setup model, data ...")
+    lines.append("            for epoch in range(epochs):")
+    lines.append("                # ... training loop ...")
+    lines.append("            metric = evaluate(model, test_data)")
+    lines.append(
+        "            print(f'condition={condition} seed={seed} accuracy: {metric}')"
+    )
+    lines.append(
+        "        print(f'condition={condition} accuracy_mean: {np.mean(results)}')"
+    )
+    lines.append("```")
+
+    return "\n".join(lines)

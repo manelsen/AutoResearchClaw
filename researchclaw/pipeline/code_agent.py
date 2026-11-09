@@ -205,14 +205,21 @@ class CodeAgent:
         blueprint = None
         if self._cfg.architecture_planning:
             arch_spec, blueprint = self._phase1_blueprint(
-                topic, exp_plan, metric,
+                topic,
+                exp_plan,
+                metric,
             )
 
         # Phase 2: Code generation
         nodes_explored = 0
         if self._cfg.tree_search_enabled and self._sandbox_factory:
             best, nodes_explored = self._phase3_tree_search(
-                topic, exp_plan, metric, pkg_hint, arch_spec, max_tokens,
+                topic,
+                exp_plan,
+                metric,
+                pkg_hint,
+                arch_spec,
+                max_tokens,
             )
         elif (
             self._cfg.sequential_generation
@@ -221,17 +228,30 @@ class CodeAgent:
         ):
             # Sequential file generation following blueprint
             files = self._phase2_sequential_generate(
-                topic, exp_plan, metric, pkg_hint, arch_spec, blueprint,
+                topic,
+                exp_plan,
+                metric,
+                pkg_hint,
+                arch_spec,
+                blueprint,
             )
             # Hard validation gates (E-03)
             if self._cfg.hard_validation:
                 files = self._hard_validate_and_repair(
-                    files, topic, exp_plan, metric, pkg_hint, arch_spec,
+                    files,
+                    topic,
+                    exp_plan,
+                    metric,
+                    pkg_hint,
+                    arch_spec,
                 )
             # Exec-fix loop
             files = self._exec_fix_loop(files)
             best = SolutionNode(
-                node_id="sequential", files=files, runs_ok=True, score=1.0,
+                node_id="sequential",
+                files=files,
+                runs_ok=True,
+                score=1.0,
             )
         else:
             # Fallback: single-shot generation
@@ -241,23 +261,38 @@ class CodeAgent:
                     "invalid — falling back to single-shot"
                 )
             files = self._phase2_generate_and_fix(
-                topic, exp_plan, metric, pkg_hint, arch_spec, max_tokens,
+                topic,
+                exp_plan,
+                metric,
+                pkg_hint,
+                arch_spec,
+                max_tokens,
             )
             # Hard validation gates (E-03) for single-shot too
             if self._cfg.hard_validation and files:
                 files = self._hard_validate_and_repair(
-                    files, topic, exp_plan, metric, pkg_hint, arch_spec,
+                    files,
+                    topic,
+                    exp_plan,
+                    metric,
+                    pkg_hint,
+                    arch_spec,
                 )
             best = SolutionNode(
-                node_id="single", files=files,
-                runs_ok=bool(files), score=1.0 if files else 0.0,
+                node_id="single",
+                files=files,
+                runs_ok=bool(files),
+                score=1.0 if files else 0.0,
             )
 
         # Phase 5: Review dialog
         review_rounds = 0
         if self._cfg.review_max_rounds > 0:
             best.files, review_rounds = self._phase4_review(
-                best.files, topic, exp_plan, metric,
+                best.files,
+                topic,
+                exp_plan,
+                metric,
             )
 
         elapsed = time.time() - t0
@@ -280,7 +315,10 @@ class CodeAgent:
     # ── Phase 1: Blueprint Planning ──────────────────────────────────────
 
     def _phase1_blueprint(
-        self, topic: str, exp_plan: str, metric: str,
+        self,
+        topic: str,
+        exp_plan: str,
+        metric: str,
     ) -> tuple[str, dict[str, Any] | None]:
         """Generate a deep implementation blueprint.
 
@@ -337,12 +375,11 @@ class CodeAgent:
         if self._domain_profile is not None:
             try:
                 from researchclaw.domains.prompt_adapter import get_adapter
+
                 adapter = get_adapter(self._domain_profile)
                 blueprint_ctx = adapter.get_blueprint_context()
                 if blueprint_ctx:
-                    parts.append(
-                        "# Domain-Specific Guidance\n" + blueprint_ctx
-                    )
+                    parts.append("# Domain-Specific Guidance\n" + blueprint_ctx)
             except Exception:
                 logger.debug("Failed to get domain context", exc_info=True)
 
@@ -366,6 +403,7 @@ class CodeAgent:
         """Parse blueprint YAML into a structured dict."""
         try:
             import yaml
+
             data = yaml.safe_load(yaml_text)
             if isinstance(data, dict) and "files" in data:
                 return data
@@ -381,8 +419,7 @@ class CodeAgent:
             return False
         # Need at least 2 files with generation_order
         has_order = sum(
-            1 for f in files
-            if isinstance(f, dict) and "generation_order" in f
+            1 for f in files if isinstance(f, dict) and "generation_order" in f
         )
         return has_order >= 2
 
@@ -420,8 +457,7 @@ class CodeAgent:
                 continue
 
             self._log_event(
-                f"  Generating {file_name} "
-                f"(order={file_spec.get('generation_order')})"
+                f"  Generating {file_name} (order={file_spec.get('generation_order')})"
             )
 
             # Build dependency context
@@ -474,7 +510,8 @@ class CodeAgent:
 
             # Build CodeMem summary via AST
             code_memory[file_name] = self._build_code_summary(
-                file_name, code,
+                file_name,
+                code,
             )
 
             self._log_event(
@@ -505,7 +542,8 @@ class CodeAgent:
         # Try ```filename:xxx.py block
         m = re.search(
             rf"```(?:filename:)?{re.escape(expected_name)}\s*\n(.*?)```",
-            content, re.DOTALL,
+            content,
+            re.DOTALL,
         )
         if m:
             return m.group(1).strip()
@@ -526,7 +564,8 @@ class CodeAgent:
 
     @staticmethod
     def _build_code_summary(
-        filename: str, code: str,
+        filename: str,
+        code: str,
     ) -> dict[str, Any]:
         """Build a CodeMem-style compressed summary via AST analysis."""
         summary: dict[str, Any] = {
@@ -548,21 +587,27 @@ class CodeAgent:
                 for n in node.body:
                     if isinstance(n, ast.FunctionDef):
                         args = [a.arg for a in n.args.args if a.arg != "self"]
-                        methods.append({
-                            "name": n.name,
-                            "args": args,
-                        })
-                summary["classes"].append({
-                    "name": node.name,
-                    "bases": [ast.unparse(b) for b in node.bases],
-                    "methods": methods,
-                })
+                        methods.append(
+                            {
+                                "name": n.name,
+                                "args": args,
+                            }
+                        )
+                summary["classes"].append(
+                    {
+                        "name": node.name,
+                        "bases": [ast.unparse(b) for b in node.bases],
+                        "methods": methods,
+                    }
+                )
             elif isinstance(node, ast.FunctionDef) and node.col_offset == 0:
                 args = [a.arg for a in node.args.args]
-                summary["functions"].append({
-                    "name": node.name,
-                    "args": args,
-                })
+                summary["functions"].append(
+                    {
+                        "name": node.name,
+                        "args": args,
+                    }
+                )
             elif isinstance(node, (ast.Import, ast.ImportFrom)):
                 try:
                     summary["imports"].append(ast.unparse(node))
@@ -618,13 +663,19 @@ class CodeAgent:
 
             # Targeted repair: ask LLM to fix specific critical issues
             files = self._repair_critical_issues(
-                files, critical, topic, exp_plan, metric, arch_spec,
+                files,
+                critical,
+                topic,
+                exp_plan,
+                metric,
+                arch_spec,
             )
 
         return files
 
     def _hard_validate(
-        self, files: dict[str, str],
+        self,
+        files: dict[str, str],
     ) -> tuple[list[str], list[str]]:
         """Run AST-based checks and classify as CRITICAL or WARNING.
 
@@ -639,6 +690,7 @@ class CodeAgent:
             check_api_correctness,
             check_variable_scoping,
             validate_syntax,
+            check_experiment_completeness,
         )
 
         # 1. Syntax check — always critical
@@ -649,8 +701,7 @@ class CodeAgent:
             if not syn.ok:
                 for issue in syn.errors:
                     critical.append(
-                        f"[{fname}] Syntax error: {issue.message} "
-                        f"(line {issue.line})"
+                        f"[{fname}] Syntax error: {issue.message} (line {issue.line})"
                     )
 
         # 2. Class quality — some are critical
@@ -707,9 +758,7 @@ class CodeAgent:
 
         # 6. Cross-file import consistency — check local imports resolve
         known_modules = {
-            fname.replace(".py", "")
-            for fname in files
-            if fname.endswith(".py")
+            fname.replace(".py", "") for fname in files if fname.endswith(".py")
         }
         for fname, code in files.items():
             if not fname.endswith(".py"):
@@ -750,6 +799,13 @@ class CodeAgent:
                                         f"'{target_file}' — will crash"
                                     )
 
+        # 7. Semantic completeness — check that main.py runs actual experiments
+        completeness_critical, completeness_warns = check_experiment_completeness(
+            files, metric_key=getattr(self, "_metric_key", "")
+        )
+        critical.extend(completeness_critical)
+        warnings.extend(completeness_warns)
+
         return critical, warnings
 
     def _repair_critical_issues(
@@ -773,9 +829,7 @@ class CodeAgent:
                 affected_files.add(m.group(1))
             else:
                 # If no filename found, assume all files affected
-                affected_files.update(
-                    f for f in files if f.endswith(".py")
-                )
+                affected_files.update(f for f in files if f.endswith(".py"))
 
         if not affected_files:
             affected_files.update(f for f in files if f.endswith(".py"))
@@ -810,8 +864,7 @@ class CodeAgent:
             merged = dict(files)
             merged.update(fixed)
             self._log_event(
-                f"  Repair updated {len(fixed)} file(s): "
-                f"{', '.join(sorted(fixed))}"
+                f"  Repair updated {len(fixed)} file(s): {', '.join(sorted(fixed))}"
             )
             return merged
 
@@ -834,7 +887,12 @@ class CodeAgent:
 
         # Initial generation (uses the existing code_generation prompt)
         files = self._generate_code(
-            topic, exp_plan, metric, pkg_hint, arch_spec, max_tokens,
+            topic,
+            exp_plan,
+            metric,
+            pkg_hint,
+            arch_spec,
+            max_tokens,
         )
         if not files:
             self._log_event("  WARNING: empty generation, returning fallback")
@@ -910,7 +968,9 @@ class CodeAgent:
         return files
 
     def _fix_runtime_error(
-        self, files: dict[str, str], result: Any,
+        self,
+        files: dict[str, str],
+        result: Any,
     ) -> dict[str, str]:
         """Fix a runtime error using targeted or full-file repair.
 
@@ -919,19 +979,19 @@ class CodeAgent:
         window.  Falls back to full-file repair if parsing fails.
         """
         stderr_tail = (result.stderr or "")[-3000:]
-        stdout_tail = "\n".join(
-            (result.stdout or "").split("\n")[-50:]
-        )
+        stdout_tail = "\n".join((result.stdout or "").split("\n")[-50:])
 
         # Try targeted repair first (E-05)
         error_loc = self._parse_error_location(stderr_tail, files)
         if error_loc:
             fname, lineno, error_msg = error_loc
-            self._log_event(
-                f"  Targeted repair: {fname}:{lineno} — {error_msg[:80]}"
-            )
+            self._log_event(f"  Targeted repair: {fname}:{lineno} — {error_msg[:80]}")
             fixed = self._targeted_file_repair(
-                files, fname, lineno, error_msg, stderr_tail,
+                files,
+                fname,
+                lineno,
+                error_msg,
+                stderr_tail,
             )
             if fixed:
                 return fixed
@@ -956,7 +1016,8 @@ class CodeAgent:
 
     @staticmethod
     def _parse_error_location(
-        stderr: str, files: dict[str, str],
+        stderr: str,
+        files: dict[str, str],
     ) -> tuple[str, int, str] | None:
         """Parse Python traceback to find failing file and line.
 
@@ -964,9 +1025,7 @@ class CodeAgent:
         """
         known_files = set(files.keys())
         # Parse traceback lines: File "xxx.py", line NNN
-        tb_pattern = re.compile(
-            r'File "(?:[^"]*[/\\])?([^"]+\.py)", line (\d+)'
-        )
+        tb_pattern = re.compile(r'File "(?:[^"]*[/\\])?([^"]+\.py)", line (\d+)')
         matches = list(tb_pattern.finditer(stderr))
         if not matches:
             return None
@@ -1007,8 +1066,7 @@ class CodeAgent:
 
         # Number the lines for the LLM
         numbered = "\n".join(
-            f"{start + i + 1:4d} | {line}"
-            for i, line in enumerate(context_lines)
+            f"{start + i + 1:4d} | {line}" for i, line in enumerate(context_lines)
         )
 
         # Build compact dependency context (summaries only)
@@ -1022,9 +1080,7 @@ class CodeAgent:
                     f"{len(summary.get('functions', []))} functions\n"
                 )
                 for cls in summary.get("classes", []):
-                    methods = ", ".join(
-                        m["name"] for m in cls.get("methods", [])
-                    )
+                    methods = ", ".join(m["name"] for m in cls.get("methods", []))
                     dep_summaries += (
                         f"  class {cls['name']}"
                         f"({', '.join(cls.get('bases', []))})"
@@ -1058,7 +1114,8 @@ class CodeAgent:
             # Try extracting as single file
             code_match = re.search(
                 r"```(?:python|filename:\S+)\s*\n(.*?)```",
-                resp.content, re.DOTALL,
+                resp.content,
+                re.DOTALL,
             )
             if code_match:
                 fixed = {target_file: code_match.group(1).strip()}
@@ -1094,7 +1151,12 @@ class CodeAgent:
         for k in range(n_cand):
             self._log_event(f"  Generating candidate {k + 1}/{n_cand}")
             files = self._generate_code(
-                topic, exp_plan, metric, pkg_hint, arch_spec, max_tokens,
+                topic,
+                exp_plan,
+                metric,
+                pkg_hint,
+                arch_spec,
+                max_tokens,
             )
             node = SolutionNode(
                 node_id=f"gen-{k}",
@@ -1276,7 +1338,8 @@ class CodeAgent:
             sandbox_dir = self._stage_dir / "agent_sandbox"
             sandbox_dir.mkdir(parents=True, exist_ok=True)
             self._sandbox = self._sandbox_factory(
-                self._exp_config, sandbox_dir,
+                self._exp_config,
+                sandbox_dir,
             )
         return self._sandbox
 
@@ -1336,6 +1399,7 @@ class CodeAgent:
         BUG-17: Always returns ``dict | None`` — never a bare string or list,
         which would cause ``.get()`` crashes in callers.
         """
+
         def _as_dict(val: Any) -> dict[str, Any] | None:
             return val if isinstance(val, dict) else None
 
@@ -1354,7 +1418,8 @@ class CodeAgent:
         # First {...} object (supports up to 2 levels of nesting)
         m = re.search(
             r"\{[^{}]*(?:\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}[^{}]*)*\}",
-            text, re.DOTALL,
+            text,
+            re.DOTALL,
         )
         if m:
             try:

@@ -1129,10 +1129,86 @@ _DEFAULT_SUB_PROMPTS: dict[str, dict[str, Any]] = {
             "- Add NaN guard: `if torch.isnan(loss): continue`\n"
             "- Use float32 (not float16) for RL value functions\n"
             "- NUMPY 2.x: np.trapz→np.trapezoid, np.erfinv→scipy.special.erfinv, "
-            "np.bool/int/float→Python builtins\n\n"
+            "np.bool/int/float→Python builtins, np.math→math.\n\n"
             "## All Project Files\n{all_files_ctx}"
         ),
     },
+    "experiment_completeness_repair": {
+        "system": (
+            "You are a senior ML engineer who fixes incomplete experiment code. "
+            "Your job is to transform code that only tests data/models into "
+            "code that actually runs experiments, trains models, and prints metrics."
+        ),
+        "user": (
+            "The generated experiment code is INCOMPLETE. It has data loading and model definitions "
+            "but NO actual experiment execution.\n\n"
+            "## Experiment Plan\n{exp_plan}\n\n"
+            "## Primary Metric\n{metric_key}\n\n"
+            "## Current Code (incomplete)\n{files_context}\n\n"
+            "## What's Missing (CRITICAL)\n{completeness_issues}\n\n"
+            "## Your Task\n"
+            "Transform this into a COMPLETE experiment that:\n\n"
+            "1. **Entry Point**: main.py MUST have `if __name__ == '__main__':` that runs ACTUAL experiments\n"
+            "2. **Training Loop**: For ML experiments, include proper training (forward, loss, backward, step)\n"
+            "3. **Evaluation**: Run evaluation after training and collect metrics\n"
+            "4. **Metric Printing**: Print results in format `metric_name: value`\n"
+            "5. **Multiple Seeds**: Run with at least 3 different random seeds\n"
+            "6. **Condition Iteration**: If multiple conditions exist, iterate over ALL of them\n\n"
+            "## Example main.py structure (DO NOT COPY THIS EXACTLY)\n"
+            "```python\n"
+            "# At top: imports, constants, utility functions\n\n"
+            "def main():\n"
+            "    # 1. Print METRIC_DEF\n"
+            "    print(f'METRIC_DEF: accuracy | direction=higher | desc=Classification accuracy')\n"
+            "    \n"
+            "    # 2. Print REGISTERED_CONDITIONS\n"
+            "    conditions = ['baseline', 'proposed', 'ablation']\n"
+            "    print(f'REGISTERED_CONDITIONS: {conditions}')\n"
+            "    \n"
+            "    # 3. For each condition\n"
+            "    for condition in conditions:\n"
+            "        results = []\n"
+            "        \n"
+            "        # 4. Multiple seeds\n"
+            "        for seed in range(5):\n"
+            "            np.random.seed(seed)\n"
+            "            torch.manual_seed(seed)\n"
+            "            \n"
+            "            # 5. Setup (data, model, optimizer)\n"
+            "            train_loader, test_loader = get_data(seed)\n"
+            "            model = create_model(condition)\n"
+            "            optimizer = torch.optim.Adam(model.parameters())\n"
+            "            \n"
+            "            # 6. Training loop\n"
+            "            for epoch in range(epochs):\n"
+            "                model.train()\n"
+            "                for batch in train_loader:\n"
+            "                    loss = train_step(model, batch, optimizer)\n"
+            "                    if torch.isnan(loss):\n"
+            "                        break\n"
+            "            \n"
+            "            # 7. Evaluation\n"
+            "            model.eval()\n"
+            "            metric = evaluate(model, test_loader)\n"
+            "            results.append(metric)\n"
+            "            print(f'condition={condition} seed={seed} {metric_key}: {metric:.4f}')\n"
+            "        \n"
+            "        # 8. Summary\n"
+            "        mean = np.mean(results)\n"
+            "        std = np.std(results)\n"
+            "        print(f'condition={condition} {metric_key}_mean: {mean:.4f} ± {std:.4f}')\n"
+            "\n"
+            "if __name__ == '__main__':\n"
+            "    main()\n"
+            "```\n\n"
+            "Return the COMPLETE experiment code using ```filename:xxx.py format.\n"
+            "Do NOT use subprocess, os.system, eval, exec, or any network/shell calls.\n"
+            "NUMPY 2.x: np.trapz→np.trapezoid, np.erfinv→scipy.special.erfinv, "
+            "np.bool/int/float→Python builtins, np.math→math.\n"
+        ),
+        "max_tokens": 16384,
+    },
+    # ── Advanced Code Agent sub-prompts ───────────────────────────────
     # ── Advanced Code Agent sub-prompts ──────────────────────────────────
     "architecture_planning": {
         "system": (
@@ -1401,12 +1477,12 @@ _DEFAULT_SUB_PROMPTS: dict[str, dict[str, Any]] = {
             "issues — they indicate the condition is not truly different.\n\n"
             "## Output Format (JSON)\n"
             "```json\n"
-            '{{\n'
+            "{{\n"
             '  "verdict": "APPROVE or REVISE",\n'
             '  "score": 1-10,\n'
             '  "critical_issues": ["issue1", "issue2"],\n'
             '  "suggestions": ["suggestion1", "suggestion2"]\n'
-            '}}\n'
+            "}}\n"
             "```\n\n"
             "Only use verdict REVISE if there are critical issues that would "
             "cause the code to crash or produce scientifically invalid results."

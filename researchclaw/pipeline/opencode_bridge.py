@@ -63,6 +63,31 @@ _FILE_HINT_KEYWORDS: tuple[str, ...] = (
     "multi-file",
 )
 
+# OpenCode-supported providers (models must have provider prefix or be natively supported)
+_OPENCODE_SUPPORTED_PROVIDERS: tuple[str, ...] = (
+    "anthropic",
+    "openai",
+    "google",
+    "gemini",
+    "azure",
+    "groq",
+    "deepseek",
+    "ollama",
+    "mistral",
+    "cohere",
+    "meta",
+)
+
+# Known unsupported model patterns (will trigger fallback to CodeAgent)
+_UNSUPPORTED_MODEL_PATTERNS: tuple[str, ...] = (
+    "glm-",  # Zhipu AI
+    "moonshot",  # Moonshot AI
+    "qwen",  # Alibaba Qwen
+    "yi-",  # 01.AI
+    "baichuan",  # Baichuan
+    "internlm",  # InternLM
+)
+
 # Domain-complexity keywords
 _DOMAIN_COMPLEX_KEYWORDS: tuple[str, ...] = (
     "multi-modal",
@@ -218,6 +243,7 @@ def score_complexity(
 # OpenCode bridge
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class OpenCodeResult:
     """Result from an OpenCode invocation."""
@@ -298,6 +324,40 @@ class OpenCodeBridge:
         except Exception:  # noqa: BLE001
             return False
 
+    def is_model_supported(self) -> tuple[bool, str]:
+        """Check if the configured model is supported by OpenCode CLI.
+
+        Returns:
+            Tuple of (is_supported, reason) where reason explains why if unsupported.
+        """
+        if not self._model:
+            # No model specified - will use default
+            return True, ""
+
+        model = self._model.lower()
+
+        # Check for unsupported model patterns
+        for pattern in _UNSUPPORTED_MODEL_PATTERNS:
+            if pattern in model:
+                return False, (
+                    f"Model '{self._model}' is not supported by OpenCode CLI. "
+                    f"OpenCode supports: Anthropic, OpenAI, Google/Gemini, Azure, "
+                    f"Groq, DeepSeek, Ollama, Mistral, Cohere, Meta. "
+                    f"Falling back to CodeAgent."
+                )
+
+        # If model has provider prefix, check if provider is supported
+        if "/" in model:
+            provider = model.split("/")[0]
+            if provider not in _OPENCODE_SUPPORTED_PROVIDERS:
+                return False, (
+                    f"Provider '{provider}' is not supported by OpenCode CLI. "
+                    f"Supported providers: {', '.join(_OPENCODE_SUPPORTED_PROVIDERS)}. "
+                    f"Falling back to CodeAgent."
+                )
+
+        return True, ""
+
     # -- workspace preparation ------------------------------------------------
 
     def _prepare_workspace(
@@ -311,7 +371,10 @@ class OpenCodeBridge:
         time_budget_sec: int,
     ) -> Path:
         """Create a temporary workspace directory with context files."""
-        ws = stage_dir / f"opencode_beast_{int(time.time())}_{time.monotonic_ns() % 100000}"
+        ws = (
+            stage_dir
+            / f"opencode_beast_{int(time.time())}_{time.monotonic_ns() % 100000}"
+        )
         ws.mkdir(parents=True, exist_ok=True)
 
         # Write experiment plan
@@ -332,13 +395,15 @@ class OpenCodeBridge:
         if extra_guidance:
             guidance_parts.append(f"## Additional Guidance\n{extra_guidance}\n")
         (ws / "GUIDANCE.md").write_text(
-            "\n".join(guidance_parts), encoding="utf-8",
+            "\n".join(guidance_parts),
+            encoding="utf-8",
         )
 
         # Write opencode.json config
         opencode_cfg = self._build_opencode_config()
         (ws / "opencode.json").write_text(
-            json.dumps(opencode_cfg, indent=2), encoding="utf-8",
+            json.dumps(opencode_cfg, indent=2),
+            encoding="utf-8",
         )
 
         return ws
@@ -377,7 +442,9 @@ class OpenCodeBridge:
 
             if self._model:
                 # If model already has a provider prefix (e.g. "anthropic/..."), use as-is
-                cfg["model"] = self._model if "/" in self._model else f"azure/{self._model}"
+                cfg["model"] = (
+                    self._model if "/" in self._model else f"azure/{self._model}"
+                )
             cfg["provider"] = {
                 "azure": {
                     "options": {
@@ -404,7 +471,9 @@ class OpenCodeBridge:
         elif self._llm_base_url:
             # Generic OpenAI-compatible provider
             if self._model:
-                cfg["model"] = self._model if "/" in self._model else f"openai/{self._model}"
+                cfg["model"] = (
+                    self._model if "/" in self._model else f"openai/{self._model}"
+                )
             cfg["provider"] = {
                 "openai": {
                     "options": {
@@ -412,11 +481,25 @@ class OpenCodeBridge:
                         "apiKey": f"{{env:{self._api_key_env}}}"
                         if self._api_key_env
                         else "",
-                    }
+                    },
+                    "models": {},
                 }
             }
+            # Register the model so OpenCode knows it exists (required for custom models)
+            if self._model:
+                cfg["provider"]["openai"]["models"] = {
+                    self._model: {
+                        "name": self._model,
+                        "modalities": {
+                            "input": ["text"],
+                            "output": ["text"],
+                        },
+                    }
+                }
         elif self._model:
-            cfg["model"] = self._model if "/" in self._model else f"openai/{self._model}"
+            cfg["model"] = (
+                self._model if "/" in self._model else f"openai/{self._model}"
+            )
 
         return cfg
 
@@ -523,7 +606,9 @@ class OpenCodeBridge:
             basename = rel.name
             if basename not in files:
                 try:
-                    files[basename] = py_file.read_text(encoding="utf-8", errors="replace")
+                    files[basename] = py_file.read_text(
+                        encoding="utf-8", errors="replace"
+                    )
                 except OSError as exc:
                     logger.warning("Beast mode: failed to read %s: %s", py_file, exc)
 
@@ -558,6 +643,15 @@ class OpenCodeBridge:
                 error="OpenCode CLI not installed or not callable",
             )
 
+        # Check if model is supported by OpenCode
+        supported, reason = self.is_model_supported()
+        if not supported:
+            logger.warning("Beast mode: %s", reason)
+            return OpenCodeResult(
+                success=False,
+                error=reason,
+            )
+
         workspace: Path | None = None
         last_error = ""
 
@@ -580,9 +674,7 @@ class OpenCodeBridge:
 
             # Build the mega-prompt (use replace instead of .format() to
             # avoid KeyError when metric contains curly braces like "F{1}")
-            prompt = _MEGA_PROMPT_TEMPLATE.replace(
-                "{metric}", metric
-            ).replace(
+            prompt = _MEGA_PROMPT_TEMPLATE.replace("{metric}", metric).replace(
                 "{time_budget_sec}", str(time_budget_sec)
             )
 
@@ -600,7 +692,8 @@ class OpenCodeBridge:
                 if "main.py" not in files:
                     logger.warning(
                         "Beast mode: OpenCode succeeded but no main.py found "
-                        "(files: %s)", list(files.keys()),
+                        "(files: %s)",
+                        list(files.keys()),
                     )
                     last_error = "No main.py in OpenCode output"
                     # Cleanup failed workspace
@@ -610,7 +703,8 @@ class OpenCodeBridge:
 
                 # Write log
                 (stage_dir / "opencode_log.txt").write_text(
-                    log, encoding="utf-8",
+                    log,
+                    encoding="utf-8",
                 )
 
                 # Cleanup workspace if configured
@@ -646,6 +740,7 @@ class OpenCodeBridge:
 # ---------------------------------------------------------------------------
 # Helper: count historical failures
 # ---------------------------------------------------------------------------
+
 
 def count_historical_failures(run_dir: Path, stage_name: str = "stage-10") -> int:
     """Count past Stage 10 failures from stage directories and logs.
